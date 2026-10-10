@@ -1,0 +1,54 @@
+name: system-tahoe
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "the caffeine effect time"
+        default: "300"
+
+jobs:
+  mac:
+    runs-on: macos-26
+    timeout-minutes: 350
+    steps:
+      - name: start Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TS_AUTHKEY }}
+          hostname: gitmac-tahoe
+
+      - name: turn on ssh
+        env:
+          SSH_PUBLIC_KEY: ${{ secrets.SSH_PUBLIC_KEY }}
+          VM_PASSWORD: ${{ secrets.VM_PASSWORD }}
+        run: |
+          sudo launchctl load -w /System/Library/LaunchDaemons/ssh.plist || true
+          sudo systemsetup -setremotelogin on || true
+          sudo dscl . -passwd /Users/runner "$VM_PASSWORD"
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_PUBLIC_KEY" >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+
+      - name: enable vnc (maybe)
+        continue-on-error: true
+        env:
+          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+        run: |
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on -restart -agent -privs -all \
+            -clientopts -setvnclegacy -vnclegacy yes -setvncpw -vncpw "$VNC_PASSWORD"
+
+      - name: caffeine effect
+        env:
+          MINUTES: ${{ inputs.minutes }}
+        run: |
+          [ "$MINUTES" -gt 340 ] && MINUTES=340
+          IP=$(tailscale ip -4 | head -n 1)
+          echo "::notice title=GitMac::SSH address -> runner@$IP"
+          echo "VM is up. SSH address: runner@$IP"
+          echo "To stop early, run in the VM: touch /tmp/gitmac-stop"
+          end=$(( $(date +%s) + MINUTES * 60 ))
+          while [ "$(date +%s)" -lt "$end" ] && [ ! -f /tmp/gitmac-stop ]; do
+            sleep 15
+          done
